@@ -53,6 +53,7 @@ Strike Rate 137.0 139.2
 **Explanation:**
 Virat Kohli has a higher batting average, while Rohit Sharma has a slightly better strike rate. Based on available data, Kohli appears more consistent while Rohit scores faster.
 
+
 ---
 
 ## 🧠 Tech Stack
