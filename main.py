@@ -172,17 +172,16 @@ def main():
                 history.pop(0)
 
             # ================= DISPLAY =================
-            display_results(rows, sql, gemini_time, execution_time)
+            #display_results(rows, sql, gemini_time, execution_time)
 
             if is_comparison_query(rows):
                 display_comparison_card(rows, user_input)
             else:
-                display_results(rows, result['sql'], 
-                   result['gemini_time'], 
-                   result['execution_time'])
+                display_results(rows, sql, gemini_time, execution_time)
 
             # ================= EXPLAIN =================
             explanation = explain_results(user_input, rows, sql)
+
             console.print(f"\n[bold green]Explanation:[/bold green] {explanation}")
 
         except Exception as e:

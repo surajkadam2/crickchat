@@ -11,7 +11,7 @@ TEMPERATURE_EXPLAIN = 0.1
 # DATABASE CONFIGURATION
 # Controls query execution limits
 # =========================
-QUERY_TIMEOUT_SECONDS = 15  # cricket queries can be complex
+QUERY_TIMEOUT_SECONDS = 30  # cricket queries can be complex
 MAX_ROWS_RETURNED = 50      # cricket needs more rows than generic
 
 
@@ -32,6 +32,26 @@ Table mapping by format and category:
 - Test bowling stats → TEST_Bowling
 - Test match results → TEST_Matches
 - Player information → Players (shared across formats)
+"""
+
+CRICKET_JOIN_RULES = """
+CRITICAL JOIN RULES — ALWAYS FOLLOW:
+
+1. batsman column in batting tables stores player_id NOT player name
+   Always join: JOIN Players p ON b.batsman = p.player_id
+   Use p.player_name to display player name
+
+2. bowler column in bowling tables stores player_id NOT player name  
+   Always join: JOIN Players p ON b.bowler = p.player_id
+   Use p.player_name to display player name
+
+3. When filtering by player name ALWAYS use Players table:
+   JOIN Players p ON b.batsman = p.player_id
+   WHERE p.player_name LIKE '%Kohli%'
+   Never filter directly on batsman or bowler column
+
+4. player_name in Players table may have variations:
+   Use LIKE '%Kohli%' not = 'Kohli' for player name searches
 """
 
 CRICKET_BUSINESS_RULES = """
