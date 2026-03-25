@@ -48,6 +48,10 @@ def print_help():
     console.print("• [green]edit[/green]    → Edit last question")
     console.print("• [green]cls[/green]     → Clear screen\n")
 
+def _fmt(val):
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
+    return str(val) if val is not None else ""
 
 def display_results(rows, sql, gemini_time, execution_time):
     if not rows:
@@ -61,7 +65,8 @@ def display_results(rows, sql, gemini_time, execution_time):
         table.add_column(str(col), style="cyan", overflow="fold")
 
     for row in rows:
-        table.add_row(*[str(row[col]) for col in columns])
+        #table.add_row(*[str(row[col]) for col in columns])
+        table.add_row(*[_fmt(row[col]) for col in columns])
 
     console.print(table)
 

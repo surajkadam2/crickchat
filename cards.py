@@ -50,6 +50,10 @@ def _better_value(metric, val1, val2):
 
     return None, None
 
+def _fmt(val):
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
+    return str(val) if val is not None else ""
 
 def display_comparison_card(rows, question):
     """
@@ -80,8 +84,12 @@ def display_comparison_card(rows, question):
 
         better, _ = _better_value(key, val1, val2)
 
-        val1_str = str(val1)
-        val2_str = str(val2)
+        #val1_str = str(val1)
+        #val2_str = str(val2)
+
+        # AFTER
+        val1_str = _fmt(val1)
+        val2_str = _fmt(val2)
 
         if better == "p1":
             val1_str = f"[bold green]{val1_str}[/bold green]"
@@ -113,7 +121,7 @@ def display_player_card(rows, question):
     for key, value in row.items():
         if key.lower() in ["player", "name"]:
             continue
-        table.add_row(key, str(value))
+        table.add_row(key, _fmt(value))
 
     panel = Panel(table, title=f"🏏 {player_name}", border_style="green")
 
