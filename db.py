@@ -6,6 +6,10 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text,exc,inspect
 from logger import log_sql, log_execution_time, log_error, logger
 from config import QUERY_TIMEOUT_SECONDS, MAX_ROWS_RETURNED
+from urllib.parse import quote_plus  # <-- added for safe password encoding
+
+# Suppress SQLAlchemy warnings
+# This is a temporary solution until we find a better way to handle these warnings without hiding potentially important ones. We specifically target SAWarning to avoid missing critical errors.
 
 warnings.filterwarnings("ignore", category=exc.SAWarning)
 
@@ -14,15 +18,20 @@ load_dotenv()
 
 DB_SERVER = os.getenv("DB_SERVER")
 DB_NAME = os.getenv("DB_NAME")
+DB_USERNAME = os.getenv("DB_USERNAME")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 
-# Create connection string
-connection_string = (
-    f"mssql+pyodbc://@{DB_SERVER}/{DB_NAME}"
-    "?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+# Encode password for URL safety (handles special characters)
+ENCODED_PASSWORD = quote_plus(DB_PASSWORD)
+
+# Build connection strings using **SQL authentication**
+CONN_STR = (
+    f"mssql+pyodbc://{DB_USERNAME}:{ENCODED_PASSWORD}@{DB_SERVER}/{DB_NAME}"
+    "?driver=ODBC+Driver+17+for+SQL+Server"
 )
 
 # Create SQLAlchemy engine
-engine = create_engine(connection_string)
+engine = create_engine(CONN_STR)
 
 def get_schema() -> str:
     """

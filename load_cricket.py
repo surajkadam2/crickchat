@@ -5,6 +5,7 @@ import os
 import time
 from dotenv import load_dotenv
 import warnings
+from urllib.parse import quote_plus  # <-- added for safe password encoding
 
 # ------------------------------------------------------------------
 # Suppress the “Unrecognized server version info …” SAWarning
@@ -20,9 +21,17 @@ load_dotenv()
 BASE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crick_csv")
 DB_SERVER = os.getenv("DB_SERVER")
 DB_NAME = os.getenv("DB_NAME")
+DB_USERNAME = os.getenv("DB_USERNAME")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 
-CONN_STR = f"mssql+pyodbc://@{DB_SERVER}/{DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+# Encode password for URL safety (handles special characters)
+ENCODED_PASSWORD = quote_plus(DB_PASSWORD)
 
+# Build connection strings using **SQL authentication**
+CONN_STR = (
+    f"mssql+pyodbc://{DB_USERNAME}:{ENCODED_PASSWORD}@{DB_SERVER}/{DB_NAME}"
+    "?driver=ODBC+Driver+17+for+SQL+Server"
+)
 
 # =========================
 # DATABASE SETUP
@@ -34,8 +43,8 @@ def create_database():
     mode because SQL Server forbids CREATE DATABASE inside a transaction.
     """
     master_conn_str = (
-        f"mssql+pyodbc://@{DB_SERVER}/master"
-        "?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+        f"mssql+pyodbc://{DB_USERNAME}:{ENCODED_PASSWORD}@{DB_SERVER}/master"
+        "?driver=ODBC+Driver+17+for+SQL+Server"
     )
     # Engine for the master DB
     engine = create_engine(master_conn_str)
@@ -44,7 +53,7 @@ def create_database():
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         # Check whether the DB already exists
         result = conn.execute(
-            text(f"SELECT name FROM sys.databases WHERE name = :dbname"),
+            text("SELECT name FROM sys.databases WHERE name = :dbname"),
             {"dbname": DB_NAME},
         )
         exists = result.fetchone()
@@ -141,9 +150,7 @@ def main():
 
     create_database()
 
-    #engine = create_engine(CONN_STR, fast_executemany=True)
-
-    # To this
+    # Engine using SQL authentication (fast_executemany disabled as per original comment)
     engine = create_engine(
         CONN_STR,
         fast_executemany=False  # ← disable this
