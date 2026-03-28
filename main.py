@@ -3,6 +3,13 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 
+from agent_types import AgentContext
+from router import classify_question
+import sql_agent
+import rag_agent
+import synthesizer
+import asyncio
+
 from prompt import ask_data_question, get_cached_schema
 from db import run_query, get_schema
 from safety import is_input_safe
@@ -74,6 +81,47 @@ def display_results(rows, sql, gemini_time, execution_time):
         f"\n[dim]Rows: {len(rows)} | AI Time: {gemini_time:.2f}s | DB Time: {execution_time:.2f}s[/dim]"
     )
 
+async def process_question(user_input, schema, history):
+    """
+    Orchestrator — routes question to the right agents
+    and returns a completed AgentContext.
+    """
+    # Step 1 — Build context
+    ctx = AgentContext(
+        question=user_input,
+        schema=schema,
+        history=history
+    )
+
+    # Step 2 — Route
+    ctx.question_type = classify_question(user_input)
+    print(f"[Orchestrator] Route → {ctx.question_type}")
+
+    # Step 3 — Run agents based on route
+    if ctx.question_type == "sql":
+        ctx = sql_agent.run(ctx)
+
+    elif ctx.question_type == "rag":
+        ctx = rag_agent.run(ctx)
+
+    elif ctx.question_type == "both":
+        # Run SQL and RAG in parallel
+        loop = asyncio.get_event_loop()
+        sql_ctx, rag_ctx = await asyncio.gather(
+            loop.run_in_executor(None, sql_agent.run, ctx),
+            loop.run_in_executor(None, rag_agent.run, ctx)
+        )
+        # Merge results from both
+        ctx.rows = sql_ctx.rows
+        ctx.sql = sql_ctx.sql
+        ctx.web_results = rag_ctx.web_results
+        #ctx.sources = sql_ctx.sources + rag_ctx.sources
+        ctx.sources = list(dict.fromkeys(sql_ctx.sources + rag_ctx.sources))
+
+    # Step 4 — Synthesize
+    ctx = synthesizer.run(ctx)
+
+    return ctx
 
 # =========================
 # MAIN CLI
@@ -147,31 +195,46 @@ def main():
             log_question(user_input)
 
             # ================= AI =================
-            result = ask_data_question(user_input, schema, history)
+             # ── Replace the old AI + DB block with this ───────────────
+            # Run orchestrator
+            ctx = asyncio.run(process_question(
+                user_input,
+                schema,
+                history
+            ))
 
-            if not result["success"]:
-                console.print(f"[bold red]Error:[/bold red] {result['error']}")
+            if ctx.error:
+                console.print(f"[bold red]Error:[/bold red] {ctx.error}")
                 continue
+            
+            # Display results
+            if ctx.rows:
+                if is_comparison_query(ctx.rows):
+                    display_comparison_card(ctx.rows, user_input)
+                else:
+                    display_results(
+                        ctx.rows,
+                        ctx.sql,
+                        0,   # gemini_time now inside agent
+                        0    # execution_time now inside agent
+                    )
 
-            sql = result["sql"]
-            gemini_time = result["gemini_time"]
+            # Show source badges
+            if ctx.sources:
+                source_str = " + ".join(
+                    ["[green]DB[/green]" if s == "db" else "[blue]Web[/blue]"
+                     for s in ctx.sources]
+                )
+                console.print(f"\n[dim]Sources: {source_str}[/dim]")
 
-            # ================= DB =================
-            db_result = run_query(sql)
-
-            rows = db_result["rows"]
-            execution_time = db_result["execution_time"]
-
-            # Save state
-            last_question = user_input
-            last_sql = sql
-            last_gemini_time = gemini_time
-            last_execution_time = execution_time
+            # Show explanation
+            if ctx.explanation:
+                console.print(f"\n[bold green]Answer:[/bold green] {ctx.explanation}")
 
             # Update history
             history.append({
                 "question": user_input,
-                "sql": sql
+                "sql": ctx.sql or ""
             })
             if len(history) > MAX_HISTORY_ITEMS:
                 history.pop(0)
@@ -179,15 +242,15 @@ def main():
             # ================= DISPLAY =================
             #display_results(rows, sql, gemini_time, execution_time)
 
-            if is_comparison_query(rows):
-                display_comparison_card(rows, user_input)
-            else:
-                display_results(rows, sql, gemini_time, execution_time)
+            #if is_comparison_query(rows):
+            #    display_comparison_card(rows, user_input)
+            #else:
+            #    display_results(rows, sql, gemini_time, execution_time)
 
-            # ================= EXPLAIN =================
-            explanation = explain_results(user_input, rows, sql)
+            ## ================= EXPLAIN =================
+            #explanation = explain_results(user_input, rows, sql)
 
-            console.print(f"\n[bold green]Explanation:[/bold green] {explanation}")
+            #console.print(f"\n[bold green]Explanation:[/bold green] {explanation}")
 
         except Exception as e:
             log_error(str(e))
