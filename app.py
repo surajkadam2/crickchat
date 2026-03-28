@@ -1,31 +1,32 @@
+import asyncio
 import streamlit as st
 import pandas as pd
-from prompt import ask_data_question, get_cached_schema
-from db import run_query, get_schema
+
 from safety import is_input_safe
-from explainer import explain_results
 from cards import is_comparison_query
+from prompt import get_cached_schema
+from db import get_schema
+from agent_types import AgentContext
+from router import classify_question
+import sql_agent
+import rag_agent
+import synthesizer
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="CrickChat", page_icon="🏏", layout="wide")
 
-# ── Light‑weight styling (only essential) ─────────────────────────────────────
-st.markdown(
-    """
-    <style>
-    /* Keep chat bubbles left‑aligned for the user and right‑aligned for the bot */
-    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-        flex-direction: row !important;
-        justify-content: flex-start !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown("""
+<style>
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# ── Brief data notice (kept minimal) ────────────────────────────────────────
 st.info(
-    "📊 Data covers international cricket up to 2024. Recent cricket data not included.",
+    "📊 Data covers international cricket up to 2024. "
+    "Current IPL 2025 and recent match data is fetched live from the web.",
     icon="ℹ️",
 )
 
@@ -39,7 +40,54 @@ if "messages" not in st.session_state:
 if "schema" not in st.session_state:
     st.session_state.schema = get_cached_schema(get_schema)
 
-# ── Sidebar – example questions only ────────────────────────────────────────
+# ── Orchestrator ──────────────────────────────────────────────────────────────
+async def process_question(user_input, schema, history):
+    ctx = AgentContext(
+        question=user_input,
+        schema=schema,
+        history=history
+    )
+
+    ctx.question_type = classify_question(user_input)
+
+    if ctx.question_type == "sql":
+        ctx = sql_agent.run(ctx)
+
+    elif ctx.question_type == "rag":
+        ctx = rag_agent.run(ctx)
+
+    elif ctx.question_type == "both":
+        loop = asyncio.get_event_loop()
+        sql_ctx, rag_ctx = await asyncio.gather(
+            loop.run_in_executor(None, sql_agent.run, ctx),
+            loop.run_in_executor(None, rag_agent.run, ctx)
+        )
+        ctx.rows = sql_ctx.rows
+        ctx.sql = sql_ctx.sql
+        ctx.web_results = rag_ctx.web_results
+        ctx.sources = list(dict.fromkeys(sql_ctx.sources + rag_ctx.sources))
+
+    ctx = synthesizer.run(ctx)
+    return ctx
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+NAME_KEYS = ["PlayerName", "player_name", "player", "name", "batsman", "bowler"]
+
+def get_player_name(row, fallback):
+    for key in NAME_KEYS:
+        if key in row and row[key]:
+            return str(row[key])
+    return fallback
+
+def source_badges(sources):
+    badges = []
+    for s in sources:
+        if s == "db":
+            badges.append("🟢 DB")
+        elif s == "web":
+            badges.append("🔵 Web")
+    return " + ".join(badges)
+
 with st.sidebar:
     st.title("🏏 CrickChat")
     st.caption("Cricket statistics in plain English")
@@ -50,8 +98,8 @@ with st.sidebar:
         "Compare Virat Kohli and Rohit Sharma in T20s",
         "Which team has the best win rate in ODIs?",
         "Who took the most wickets in ODIs?",
-        "Best bowling average in Tests (min 50 wickets)?",
-        "Which country won the most T20 matches?",
+        "How is Kohli performing in IPL 2025?",
+        "Kohli career T20 average vs IPL 2025 form?",
     ]
     for q in example_questions:
         if st.button(q, use_container_width=True):
@@ -59,7 +107,7 @@ with st.sidebar:
     st.divider()
     st.caption("CricketStats DB · 16 tables · 300K+ rows")
 
-# ── Chat History Display (no system UI inside chat bubbles) ─────────────────
+# ── Chat History Display ──────────────────────────────────────────────────────
 for msg in st.session_state.messages:
     avatar = "🧑" if msg["role"] == "user" else "🤖"
     with st.chat_message(msg["role"], avatar=avatar):
@@ -67,6 +115,10 @@ for msg in st.session_state.messages:
             st.write(msg["content"])
         elif msg["type"] == "table":
             st.table(msg["content"])
+            if msg.get("explanation"):
+                st.write(msg["explanation"])
+            if msg.get("sources"):
+                st.caption(f"Sources: {source_badges(msg['sources'])}")
         elif msg["type"] == "comparison":
             names = msg.get("names", ["Player 1", "Player 2"])
             col1, col2 = st.columns(2)
@@ -76,18 +128,16 @@ for msg in st.session_state.messages:
             with col2:
                 st.subheader(names[1])
                 st.table(msg["content"][1])
+            if msg.get("explanation"):
+                st.write(msg["explanation"])
+            if msg.get("sources"):
+                st.caption(f"Sources: {source_badges(msg['sources'])}")
+        elif msg["type"] == "web":
+            st.write(msg["content"])
+            if msg.get("sources"):
+                st.caption(f"Sources: {source_badges(msg['sources'])}")
 
-# ── Input Handling ───────────────────────────────────────────────────────────
-NAME_KEYS = ["PlayerName", "player_name", "player", "name", "batsman", "bowler"]
-
-
-def get_player_name(row, fallback):
-    for key in NAME_KEYS:
-        if key in row and row[key]:
-            return str(row[key])
-    return fallback
-
-
+# ── Input Handling ────────────────────────────────────────────────────────────
 user_input = None
 if "pending_question" in st.session_state:
     user_input = st.session_state.pending_question
@@ -97,76 +147,57 @@ prompt = st.chat_input("Ask a cricket question...")
 if prompt:
     user_input = prompt
 
-# ── Process Question ────────────────────────────────────────────────────────
+# ── Process Question ──────────────────────────────────────────────────────────
 if user_input:
-    # Show user message
     with st.chat_message("user", avatar="🧑"):
         st.write(user_input)
     st.session_state.messages.append(
         {"role": "user", "type": "text", "content": user_input}
     )
 
-    # Safety check
     if not is_input_safe(user_input):
-        error_msg = "That question doesn't look safe to process."
         with st.chat_message("assistant", avatar="🤖"):
-            st.warning(error_msg)
+            st.warning("That question doesn't look safe to process.")
         st.session_state.messages.append(
-            {"role": "assistant", "type": "text", "content": error_msg}
+            {"role": "assistant", "type": "text",
+             "content": "That question doesn't look safe to process."}
         )
     else:
-        # Main processing
         with st.chat_message("assistant", avatar="🤖"):
             with st.spinner("Thinking..."):
-                result = ask_data_question(
+                ctx = asyncio.run(process_question(
                     user_input,
                     st.session_state.schema,
-                    st.session_state.history,
+                    st.session_state.history
+                ))
+
+            if ctx.error:
+                st.error("Error processing your question. Please try again.")
+                st.session_state.messages.append(
+                    {"role": "assistant", "type": "text",
+                     "content": "Error processing your question."}
                 )
 
-            # ── 1️⃣  LLM‑generation errors ─────────────────────────────────────
-            if not result.get("success", False):
-                friendly_error = "Error processing, try again."
-                st.error(friendly_error)
-                st.session_state.messages.append(
-                    {"role": "assistant", "type": "text", "content": friendly_error}
-                )
-                # keep history entry (even if SQL is empty) so the conversation flow stays
-                st.session_state.history.append(
-                    {"question": user_input, "sql": result.get("sql", "")}
-                )
-                if len(st.session_state.history) > 5:
-                    st.session_state.history.pop(0)
-                st.stop()
+            elif ctx.question_type == "rag" and not ctx.rows:
+                # Web only answer
+                st.write(ctx.explanation)
+                st.caption(f"Sources: {source_badges(ctx.sources)}")
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "type": "web",
+                    "content": ctx.explanation,
+                    "sources": ctx.sources
+                })
 
-            # ── 2️⃣  Run the generated SQL – catch any DB‑side errors ─────────────
-            try:
-                db_result = run_query(result["sql"])
-                rows = db_result["rows"]
-            except Exception as e:  # noqa: BLE001 – we deliberately swallow the stack
-                # Show a clean, user‑friendly message instead of the traceback
-                friendly_msg = "Data is not available."
-                st.info(friendly_msg)
+            elif not ctx.rows and not ctx.web_results:
+                st.info("No results found.")
                 st.session_state.messages.append(
-                    {"role": "assistant", "type": "text", "content": friendly_msg}
+                    {"role": "assistant", "type": "text",
+                     "content": "No results found."}
                 )
-                # Record the attempt in history (helps LLM stay on track)
-                st.session_state.history.append(
-                    {"question": user_input, "sql": result["sql"]}
-                )
-                if len(st.session_state.history) > 5:
-                    st.session_state.history.pop(0)
-                st.stop()
 
-            # ── 3️⃣  Normal result handling ───────────────────────────────────────
-            if not rows:
-                no_res = "No results found."
-                st.info(no_res)
-                st.session_state.messages.append(
-                    {"role": "assistant", "type": "text", "content": no_res}
-                )
-            elif is_comparison_query(rows):
-                df = pd.DataFrame(rows)
+            elif ctx.rows and is_comparison_query(ctx.rows):
+                df = pd.DataFrame(ctx.rows)
                 row1, row2 = df.iloc[0], df.iloc[1]
 
                 p1_name = get_player_name(row1, "Player 1")
@@ -184,41 +215,39 @@ if user_input:
                     st.subheader(p2_name)
                     st.table(disp2)
 
-                explanation = explain_results(user_input, rows, result["sql"])
-                st.write(explanation)
+                st.write(ctx.explanation)
+                st.caption(f"Sources: {source_badges(ctx.sources)}")
 
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "type": "comparison",
-                        "content": [disp1, disp2],
-                        "names": [p1_name, p2_name],
-                        "explanation": explanation,
-                    }
-                )
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "type": "comparison",
+                    "content": [disp1, disp2],
+                    "names": [p1_name, p2_name],
+                    "explanation": ctx.explanation,
+                    "sources": ctx.sources
+                })
+
             else:
-                df = pd.DataFrame(rows)
-                # Limit rows for speed
+                df = pd.DataFrame(ctx.rows)
                 if len(df) > 100:
                     df = df.head(100)
                     st.caption("Showing first 100 rows.")
                 st.table(df)
+                st.write(ctx.explanation)
+                st.caption(f"Sources: {source_badges(ctx.sources)}")
 
-                explanation = explain_results(user_input, rows, result["sql"])
-                st.write(explanation)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "type": "table",
+                    "content": df,
+                    "explanation": ctx.explanation,
+                    "sources": ctx.sources
+                })
 
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "type": "table",
-                        "content": df,
-                        "explanation": explanation,
-                    }
-                )
-
-            # ── 4️⃣  Update conversation history (keep last 5) ─────────────────────
-            st.session_state.history.append(
-                {"question": user_input, "sql": result["sql"]}
-            )
+            # Update history
+            st.session_state.history.append({
+                "question": user_input,
+                "sql": ctx.sql or ""
+            })
             if len(st.session_state.history) > 5:
                 st.session_state.history.pop(0)
