@@ -26,7 +26,7 @@ st.markdown("""
 
 st.info(
     "📊 Data covers international cricket up to 2024. "
-    "Current IPL 2025 and recent match data is fetched live from the web.",
+    "Current IPL 2026 and recent match data is fetched live from the web.",
     icon="ℹ️",
 )
 
@@ -98,8 +98,8 @@ with st.sidebar:
         "Compare Virat Kohli and Rohit Sharma in T20s",
         "Which team has the best win rate in ODIs?",
         "Who took the most wickets in ODIs?",
-        "How is Kohli performing in IPL 2025?",
-        "Kohli career T20 average vs IPL 2025 form?",
+        "How is Kohli performing in IPL 2026?",
+        "Kohli career T20 average vs IPL 2026 form?"
     ]
     for q in example_questions:
         if st.button(q, use_container_width=True):
